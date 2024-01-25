@@ -67,4 +67,4 @@ ENCODING=UNICODE
 
 #### Specify the location of the host address file here instead of
 #### with the -h option of gpinitsystem.
-#MACHINE_LIST_FILE=/opt/greenplum-db-6.26.0/hostfile
+#MACHINE_LIST_FILE=/opt/greenplum-db-6.26.1/hostfile
