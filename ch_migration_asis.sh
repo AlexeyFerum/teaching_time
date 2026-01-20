@@ -528,7 +528,7 @@ apply_dictionaries() {
     [ $has_errors -eq 0 ] || warning "Some dictionaries failed to create"
 }
 
-# 3. Data migration
+# 3. Data migration with two-phase approach
 migrate_data() {
     log "=== Step 3: Data migration ==="
     
@@ -543,20 +543,49 @@ migrate_data() {
     fi
     
     local total_errors=0
+    
+    # Phase 1: Migrate distributed tables first
+    log "Phase 1: Migrating distributed tables..."
     for db in $databases; do
-        log "Migrating data from database: $db"
+        log "Processing distributed tables in database: $db"
         
-        # Get list of tables (excluding views and dictionaries)
-        local tables
-        tables=$(clickhouse_query_old \
+        # Get list of distributed tables
+        local distributed_tables
+        distributed_tables=$(clickhouse_query_old \
+            "SELECT name FROM system.tables WHERE database = '$db' AND engine ILIKE 'Distributed%'")
+        
+        if [ -n "$distributed_tables" ]; then
+            for table in $distributed_tables; do
+                if ! migrate_table_data "$db" "$table"; then
+                    total_errors=$((total_errors + 1))
+                fi
+            done
+        else
+            log "  No distributed tables found in $db"
+        fi
+    done
+    
+    # Phase 2: Migrate local tables
+    log "Phase 2: Migrating local tables..."
+    for db in $databases; do
+        log "Processing local tables in database: $db"
+        
+        # Get list of local tables (excluding views, dictionaries, postgres and distributed tables)
+        local local_tables
+        local_tables=$(clickhouse_query_old \
             "SELECT name FROM system.tables WHERE database = '$db' AND engine NOT ILIKE '%view%' \
-                AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%'")
+                AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' \
+                AND engine NOT ILIKE 'Distributed%'")
         
-        for table in $tables; do
-            if ! migrate_table_data "$db" "$table"; then
-                total_errors=$((total_errors + 1))
-            fi
-        done
+        if [ -n "$local_tables" ]; then
+            for table in $local_tables; do
+                if ! migrate_table_data "$db" "$table"; then
+                    total_errors=$((total_errors + 1))
+                fi
+            done
+        else
+            log "  No local tables found in $db"
+        fi
     done
     
     if [ $total_errors -eq 0 ]; then
@@ -572,15 +601,54 @@ migrate_table_data() {
     
     log "  Migrating table: $db.$table"
     
-    # Get row count for logging
+    # Check if target table already has data
+    log "    Checking if target table has data..."
+    local target_count=0
+    
+    # Try to get count from target table, handle errors gracefully
+    local count_result
+    count_result=$(clickhouse_query_new "SELECT count() FROM $db.\`$table\`" 2>&1)
+    local count_exit_code=$?
+    
+    if [ $count_exit_code -eq 0 ]; then
+        target_count=$(echo "$count_result" | tr -d '\n' | tr -d '[:space:]')
+    else
+        # If table doesn't exist or other error, treat as empty
+        target_count=0
+    fi
+    
+    if [ -n "$target_count" ] && [ "$target_count" -gt 0 ]; then
+        warning "    Target table $db.$table already contains $target_count rows. Skipping."
+        return 0
+    fi
+    
+    # Get row count from source for logging
     local row_count
     row_count=$(clickhouse_query_old "SELECT count() FROM $db.\`$table\`" | tr -d '\n')
     
-    log "    Total rows: $row_count"
-    
+    # Handle empty tables
     if [ -z "$row_count" ] || [ "$row_count" == "0" ]; then
         log "    Table is empty, skipping"
         return 0
+    fi
+    
+    log "    Total rows in source: $row_count"
+    
+    # For distributed tables, get underlying table count for better estimation
+    local engine
+    engine=$(clickhouse_query_old \
+        "SELECT engine FROM system.tables WHERE database = '$db' AND name = '$table'" | tr -d '\n')
+    
+    if echo "$engine" | grep -qi "Distributed"; then
+        log "    This is a distributed table"
+        # Get underlying tables if possible
+        local underlying_tables
+        underlying_tables=$(clickhouse_query_old \
+            "SELECT underlying_table FROM system.distributed_tables WHERE database = '$db' AND name = '$table'" 2>/dev/null)
+        
+        if [ -n "$underlying_tables" ]; then
+            log "    Underlying tables: $underlying_tables"
+        fi
     fi
     
     # Migrate data using INSERT ... SELECT
@@ -596,13 +664,19 @@ migrate_table_data() {
         end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
-        # Verify row count
+        # Verify row count in target
         local new_row_count
         new_row_count=$(clickhouse_query_new "SELECT count() FROM $db.\`$table\`" | tr -d '\n')
         
         if [ "$row_count" -eq "$new_row_count" ]; then
-            log "    Successfully migrated $row_count rows in ${duration}s"
+            success "    Successfully migrated $row_count rows in ${duration}s"
             return 0
+        elif [ "$new_row_count" -gt "$row_count" ]; then
+            warning "    Target has more rows than source! Source: $row_count, Target: $new_row_count (possible duplication)"
+            return 1
+        elif [ "$new_row_count" -lt "$row_count" ]; then
+            warning "    Target has fewer rows than source! Source: $row_count, Target: $new_row_count (possible data loss)"
+            return 1
         else
             warning "    Row count mismatch! Source: $row_count, Target: $new_row_count"
             return 1
@@ -641,8 +715,8 @@ verify_migration() {
         warning "Database counts don't match!"
     fi
     
-    # Verify table counts per database
-    log "Verifying table counts..."
+    # Verify table counts per database (excluding distributed tables)
+    log "Verifying table counts (excluding distributed tables)..."
     
     local databases
     databases=$(clickhouse_query_old \
@@ -653,10 +727,12 @@ verify_migration() {
         local new_table_count
         old_table_count=$(clickhouse_query_old \
             "SELECT count() FROM system.tables WHERE database = '$db' AND engine NOT ILIKE '%view%' \
-                AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%'")
+                AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' \
+                AND engine NOT ILIKE 'Distributed%'")
         new_table_count=$(clickhouse_query_new \
             "SELECT count() FROM system.tables WHERE database = '$db' AND engine NOT ILIKE '%view%' \
-                AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%'")
+                AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' \
+                AND engine NOT ILIKE 'Distributed%'")
         
         if [ "$old_table_count" -eq "$new_table_count" ]; then
             log "  Database $db: tables match ($old_table_count)"
@@ -665,13 +741,15 @@ verify_migration() {
         fi
     done
     
-    # Sample data verification
-    log "Performing sample data verification..."
+    # Sample data verification (excluding distributed tables)
+    log "Performing sample data verification (excluding distributed tables)..."
     
     # Check a few random tables
     local sample_tables
     sample_tables=$(clickhouse_query_old \
-        "SELECT concat(database, '.', name) FROM system.tables WHERE database NOT IN ($EXCLUDED_DATABASES) AND engine NOT ILIKE '%view%' AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' ORDER BY rand() LIMIT 3")
+        "SELECT concat(database, '.', name) FROM system.tables WHERE database NOT IN ($EXCLUDED_DATABASES) \
+            AND engine NOT ILIKE '%view%' AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' \
+            AND engine NOT ILIKE 'Distributed%' ORDER BY rand() LIMIT 3")
     
     for table in $sample_tables; do
         log "  Verifying table: $table"
