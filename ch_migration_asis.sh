@@ -15,6 +15,12 @@ CLUSTER_NAME="epm_cluster"
 BACKUP_DIR="/Users/alexey_zheleznoy/Desktop/jobs/clickhouse/my_ch/backup"
 LOG_FILE="/Users/alexey_zheleznoy/Desktop/jobs/clickhouse/my_ch/clickhouse-migration.log"
 
+# Exclude system databases
+EXCLUDED_DATABASES="'system', 'information_schema', 'INFORMATION_SCHEMA', 'default'"
+
+# Exclude system tables/views
+EXCLUDED_TABLE_ENGINES="'dictionary', '%postgres%', '%view%'"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -219,7 +225,7 @@ export_ddl() {
     # Export list of databases (excluding system databases)
     local databases
     databases=$(clickhouse_query_old \
-        "SELECT name FROM system.databases WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA', 'default')")
+        "SELECT name FROM system.databases WHERE name NOT IN ($EXCLUDED_DATABASES)")
     
     if [ -z "$databases" ]; then
         warning "No non-system databases found"
@@ -529,7 +535,7 @@ migrate_data() {
     # Get list of all non-system databases
     local databases
     databases=$(clickhouse_query_old \
-        "SELECT name FROM system.databases WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA', 'default')")
+        "SELECT name FROM system.databases WHERE name NOT IN ($EXCLUDED_DATABASES)")
     
     if [ -z "$databases" ]; then
         warning "No databases to migrate"
@@ -622,9 +628,9 @@ verify_migration() {
     local old_db_count
     local new_db_count
     old_db_count=$(clickhouse_query_old \
-        "SELECT count() FROM system.databases WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA', 'default')")
+        "SELECT count() FROM system.databases WHERE name NOT IN ($EXCLUDED_DATABASES)")
     new_db_count=$(clickhouse_query_new \
-        "SELECT count() FROM system.databases WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA', 'default')")
+        "SELECT count() FROM system.databases WHERE name NOT IN ($EXCLUDED_DATABASES)")
     
     log "Databases in old cluster: $old_db_count"
     log "Databases in new cluster: $new_db_count"
@@ -640,7 +646,7 @@ verify_migration() {
     
     local databases
     databases=$(clickhouse_query_old \
-        "SELECT name FROM system.databases WHERE name NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA', 'default')")
+        "SELECT name FROM system.databases WHERE name NOT IN ($EXCLUDED_DATABASES)")
     
     for db in $databases; do
         local old_table_count
@@ -665,7 +671,7 @@ verify_migration() {
     # Check a few random tables
     local sample_tables
     sample_tables=$(clickhouse_query_old \
-        "SELECT concat(database, '.', name) FROM system.tables WHERE database NOT IN ('system', 'information_schema', 'INFORMATION_SCHEMA', 'default') AND engine NOT ILIKE '%view%' AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' ORDER BY rand() LIMIT 3")
+        "SELECT concat(database, '.', name) FROM system.tables WHERE database NOT IN ($EXCLUDED_DATABASES) AND engine NOT ILIKE '%view%' AND engine NOT ILIKE 'dictionary' AND engine NOT ILIKE '%postgres%' ORDER BY rand() LIMIT 3")
     
     for table in $sample_tables; do
         log "  Verifying table: $table"
