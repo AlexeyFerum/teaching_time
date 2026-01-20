@@ -138,6 +138,28 @@ create_backup_dir() {
     chown -R clickhouse:clickhouse "$BACKUP_DIR" 2>/dev/null || true
 }
 
+# Function to fix escaped characters in DDL files
+fix_escaped_chars_in_ddl() {
+    local file_path=$1
+    
+    if [ ! -f "$file_path" ]; then
+        return 1
+    fi
+    
+    # Read the file content
+    local content
+    content=$(cat "$file_path")
+    
+    # Replace escaped quotes with regular quotes
+    content=$(echo "$content" | sed "s/\\\\'/'/g")
+    
+    # Replace escaped backslashes with single backslashes
+    content=$(echo "$content" | sed 's/\\\\/\\/g')
+    
+    # Write fixed content back
+    echo "$content" > "$file_path"
+}
+
 export_tables() {
     local db=$1
     local tables
@@ -150,6 +172,9 @@ export_tables() {
         log "  Exporting table: $table"
         clickhouse_query_old \
             "SHOW CREATE TABLE $db.\`$table\`" > "$BACKUP_DIR/ddl/$db/$table.sql"
+        
+        # Fix escaped characters in DDL
+        fix_escaped_chars_in_ddl "$BACKUP_DIR/ddl/$db/$table.sql"
     done
 }
 
@@ -164,6 +189,9 @@ export_views() {
         log "  Exporting view: $view"
         clickhouse_query_old \
             "SHOW CREATE TABLE $db.\`$view\`" > "$BACKUP_DIR/ddl/$db/$view.view.sql"
+        
+        # Fix escaped characters in DDL
+        fix_escaped_chars_in_ddl "$BACKUP_DIR/ddl/$db/$view.view.sql"
     done
 }
 
@@ -178,6 +206,9 @@ export_dictionaries() {
         log "  Exporting dictionary: $dict"
         clickhouse_query_old \
             "SHOW CREATE DICTIONARY $db.$dict" > "$BACKUP_DIR/ddl/$db/$dict.dict.sql"
+        
+        # Fix escaped characters in DDL
+        fix_escaped_chars_in_ddl "$BACKUP_DIR/ddl/$db/$dict.dict.sql"
     done
 }
 
@@ -201,6 +232,9 @@ export_ddl() {
         mkdir -p "$BACKUP_DIR/ddl/$db"
         clickhouse_query_old \
             "SHOW CREATE DATABASE $db" > "$BACKUP_DIR/ddl/$db/database.sql"
+        
+        # Fix escaped characters in database DDL
+        fix_escaped_chars_in_ddl "$BACKUP_DIR/ddl/$db/database.sql"
         
         export_tables "$db"
         export_views "$db"
