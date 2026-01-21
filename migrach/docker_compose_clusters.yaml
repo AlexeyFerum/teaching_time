@@ -1,0 +1,150 @@
+services:
+  zk0:
+    image: 'zookeeper:latest'
+    networks:
+      - ch_cluster0
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOOKEEPER_CLIENT_PORT=2181
+    ports:
+      - "2181:2181"
+      - "2888:2888"
+      - "3888:3888"
+
+  ch0:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster0
+    depends_on:
+      - zk0
+
+  ch1:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9001:9000"
+      - "8124:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster0
+    depends_on:
+      - zk0
+
+  ch2:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9002:9000"
+      - "8125:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster0
+    depends_on:
+      - zk0
+
+  ch3:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9003:9000"
+      - "8126:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster0
+    depends_on:
+      - zk0
+
+  zk1:
+    image: 'zookeeper:latest'
+    networks:
+      - ch_cluster1
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOOKEEPER_CLIENT_PORT=2181
+    ports:
+      - "2182:2181"
+      - "2889:2888"
+      - "3889:3888"
+
+  ch4:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9004:9000"
+      - "8127:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster1
+    depends_on:
+      - zk1
+
+  ch5:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9005:9000"
+      - "8128:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster1
+    depends_on:
+      - zk1
+
+  ch6:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9006:9000"
+      - "8129:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster1
+    depends_on:
+      - zk1
+
+  ch7:
+    image: clickhouse/clickhouse-server
+    ports:
+      - "9007:9000"
+      - "8130:8123"
+    ulimits:
+      nproc: 65535
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - ch_cluster1
+    depends_on:
+      - zk1
+
+networks:
+  ch_cluster0:
+    driver: bridge
+  ch_cluster1:
+    driver: bridge
