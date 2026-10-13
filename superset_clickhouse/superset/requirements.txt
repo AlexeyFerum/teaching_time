@@ -1,0 +1,2 @@
+# Superset 6.1 требует clickhouse-connect >= 0.13.0
+clickhouse-connect>=0.13.0

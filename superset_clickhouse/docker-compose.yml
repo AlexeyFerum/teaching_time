@@ -1,0 +1,93 @@
+# ClickHouse + Apache Superset
+# Версии: ClickHouse 26.9 (последняя stable-ветка), Superset 6.1.0 (последний релиз)
+
+x-superset-common: &superset-common
+  build:
+    context: ./superset
+    dockerfile: Dockerfile
+  image: superset-clickhouse:6.1.0
+  volumes:
+    - superset_home:/app/superset_home
+  networks:
+    - analytics
+
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9
+    container_name: clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"   # HTTP-интерфейс (его использует Superset)
+      - "9000:9000"   # native TCP
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-default}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?Задайте CLICKHOUSE_PASSWORD в файле .env}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - analytics
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  superset-init:
+    <<: *superset-common
+    container_name: superset-init
+    restart: "no"
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Задайте SUPERSET_SECRET_KEY в файле .env}
+      ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+      ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@example.com}
+    command:
+      - bash
+      - -c
+      - |
+        set -e
+        superset db upgrade
+        superset fab create-admin \
+          --username "$$ADMIN_USERNAME" \
+          --firstname Admin \
+          --lastname User \
+          --email "$$ADMIN_EMAIL" \
+          --password "$$ADMIN_PASSWORD" || echo "Админ уже существует, пропускаю"
+        superset init
+
+  superset:
+    <<: *superset-common
+    container_name: superset
+    restart: unless-stopped
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Задайте SUPERSET_SECRET_KEY в файле .env}
+    ports:
+      - "8088:8088"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      superset-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8088/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  clickhouse_data:
+  clickhouse_logs:
+  superset_home:
+
+networks:
+  analytics:
+    driver: bridge
