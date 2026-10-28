@@ -29,7 +29,7 @@
 umask 077
 
 if (( BASH_VERSINFO[0] < 4 )); then
-  echo "Нужен bash 4+ (на macOS: brew install bash)" >&2
+  echo "bash 4+ is required (on macOS: brew install bash)" >&2
   exit 1
 fi
 
@@ -41,7 +41,38 @@ for _l in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8 ru_RU.UTF-8 ru_RU.utf8; do
   fi
 done
 
-usage() { sed -n '2,/^umask/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+# Справка для пользователя (на английском, выводится по -h)
+usage() {
+  cat <<'USAGE'
+sql-anon.sh - anonymize SQL scripts before sending them to AI assistants.
+
+Replaces schema, table, column, alias and function names with neutral
+placeholders (schema_001, table_001, column_001, ...), masks string literals
+('val_001') and strips comments. A mapping file is saved so the original
+names can be restored later (-r).
+
+Usage:
+  sql-anon.sh [-m map] [-k keep] [-N] [-b] [file.sql] > anon.sql
+  sql-anon.sh -r [-m map] [ai_answer.txt]            > restored.txt
+
+Options:
+  -m FILE  mapping file (default: ./sql-anon.map). Loaded if it exists, so
+           placeholders stay stable across runs.
+  -k FILE  file with names to keep as-is, one per line ('#' starts a comment),
+           e.g.: id, created_at, updated_at
+  -N       also mask numeric literals with 4+ digits (IDs, amounts)
+  -b       support [bracketed] identifiers (MS SQL)
+  -r       reverse mode: put the original names back into the text
+  -h       show this help
+
+If no file is given, input is read from stdin. Output goes to stdout.
+
+WARNING: the mapping file contains the original names and values.
+Never send it to an AI assistant.
+
+Requirements: bash 4+, a UTF-8 locale (for non-ASCII unquoted identifiers).
+USAGE
+}
 
 MAP=./sql-anon.map KEEPFILE= MASKNUM=0 REVERSE=0 BRACKETS=0
 while getopts ':m:k:Nrbh' o; do
@@ -61,7 +92,7 @@ INPUT=${1:--}
 if [[ $INPUT == - ]]; then
   mapfile -t LINES
 else
-  [[ -r $INPUT ]] || { echo "Не могу прочитать: $INPUT" >&2; exit 1; }
+  [[ -r $INPUT ]] || { echo "Cannot read input file: $INPUT" >&2; exit 1; }
   mapfile -t LINES < "$INPUT"
 fi
 
@@ -101,7 +132,7 @@ for w in COUNT SUM AVG MIN MAX COALESCE NULLIF GREATEST LEAST CONCAT CONCAT_WS S
 done
 
 if [[ -n $KEEPFILE ]]; then
-  [[ -r $KEEPFILE ]] || { echo "Не могу прочитать: $KEEPFILE" >&2; exit 1; }
+  [[ -r $KEEPFILE ]] || { echo "Cannot read keep file: $KEEPFILE" >&2; exit 1; }
   while IFS= read -r l; do
     l=${l%%#*}
     l=${l//[[:space:]]/}
@@ -178,7 +209,7 @@ write_map() {
 
 # ---------------------------------------------------------------- обратный режим
 if (( REVERSE )); then
-  [[ -f $MAP ]] || { echo "Нет файла соответствий: $MAP" >&2; exit 1; }
+  [[ -f $MAP ]] || { echo "Mapping file not found: $MAP" >&2; exit 1; }
   load_map
   for line in "${LINES[@]}"; do
     rest=$line OUT=
@@ -420,8 +451,8 @@ run_pass 2
 write_map
 
 {
-  printf 'Готово. Таблицы: %d, колонки: %d, схемы: %d, функции: %d, алиасы: %d, строки: %d\n' \
+  printf 'Done. Tables: %d, columns: %d, schemas: %d, functions: %d, aliases: %d, string literals: %d\n' \
     "${CNT[table]:-0}" "${CNT[column]:-0}" "${CNT[schema]:-0}" "${CNT[func]:-0}" \
     "${CNT[alias]:-0}" "${CNT[val]:-0}"
-  printf 'Карта соответствий: %s (содержит оригиналы — в ИИ не отправлять!)\n' "$MAP"
+  printf 'Mapping file: %s (contains the originals - do NOT send it to an AI!)\n' "$MAP"
 } >&2
